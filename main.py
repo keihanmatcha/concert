@@ -117,68 +117,81 @@ def main_search(place_name, checkin=None, checkout=None, squeeze_cond=""):
     if not checkin: checkin = date.today().isoformat()
     if not checkout: checkout = (date.today() + timedelta(days=1)).isoformat()
 
-    # エリア特定
-    location = Nominatim(user_agent="rakuten_search_bot").geocode(place_name + ", Japan", timeout=10)
-    if not location: return pd.DataFrame()
-    match = find_nearest_rakuten_area(location.latitude, location.longitude, rakuten_df)
+    # --- デバッグ情報 ---
+    geolocator = Nominatim(user_agent="rakuten_search_bot")
+    location = geolocator.geocode(place_name + ", Japan", timeout=10)
     
+    if not location:
+        print(f"❌ {place_name} の位置情報が取得できませんでした。")
+        return pd.DataFrame()
+    
+    print(f"📍 座標取得: {place_name} ({location.latitude}, {location.longitude})")
+    
+    match = find_nearest_rakuten_area(location.latitude, location.longitude, rakuten_df)
+    if not match:
+        print(f"❌ 近隣の楽天エリアが見つかりませんでした。")
+        return pd.DataFrame()
+    
+    print(f"🗺️ エリア判定: {match['largeClassName']} - {match['middleClassName']} - {match['smallClassName']} ({match['detailClassName']})")
+    print(f"🔍 距離: {match['matched_string']}")
+
     params = {
         "applicationId": RAKUTEN_APP_ID,
         "format": "json",
-        "checkinDate": checkin, "checkoutDate": checkout,
+        "checkinDate": checkin,
+        "checkoutDate": checkout,
+        "largeClassCode": "japan",
         "middleClassCode": match["middleClassCode"],
         "smallClassCode": match["smallClassCode"],
         "detailClassCode": match["detailClassCode"],
-        "squeezeCondition": squeeze_cond
+        "squeezeCondition": squeeze_cond,
+        "hits": 30
     }
 
     res = requests.get("https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426", params=params)
-    if res.status_code != 200: return pd.DataFrame()
+    
+    if res.status_code != 200:
+        print(f"❌ APIエラー: サービス側で問題が発生しました (Status: {res.status_code})")
+        # エラー詳細を表示
+        err_msg = res.json().get("error_description", "Unknown Error")
+        print(f"   理由: {err_msg}")
+        return pd.DataFrame()
 
     hotels = res.json().get("hotels", [])
     plans = []
+    # ... (プラン解析部分は前のコードと同じ) ...
     for h in hotels:
-        info = h["hotel"][0]["hotelBasicInfo"]
-        rooms = h["hotel"][1].get("roomInfo", [])
-        for i in range(0, len(rooms), 2):
-            basic = rooms[i].get("roomBasicInfo", {})
-            price = rooms[i+1].get("dailyCharge", {}).get("total")
+        hotel_info = h["hotel"][0]["hotelBasicInfo"]
+        room_info_list = h["hotel"][1].get("roomInfo", [])
+        for i in range(0, len(room_info_list), 2):
+            basic = room_info_list[i].get("roomBasicInfo", {})
+            charge = room_info_list[i+1].get("dailyCharge", {})
+            price = charge.get("total")
             if price:
                 plans.append({
-                    "会場": place_name, "チェックイン": checkin, "ホテル名": info["hotelName"],
+                    "会場": place_name, "チェックイン": checkin, "ホテル名": hotel_info["hotelName"],
                     "料金": int(price), "予約URL": basic.get("reserveUrl")
                 })
     return pd.DataFrame(plans)
 
-# --- 4. 実行処理 ---
-
-# こだわり条件の処理
-condition_map = {"禁煙": "kinen", "インターネット": "internet", "大浴場": "daiyoku", "温泉": "onsen", "朝食付き": "breakfast", "夕食付き": "dinner"}
-squeeze_cond = ",".join([condition_map[c.strip()] for c in COND_INPUT.split(",") if c.strip() in condition_map])
-
-# 会場リストの処理
-venue_list = []
-for line in PLACE_INPUT.splitlines():
-    if not line.strip(): continue
-    parts = [p.strip() for p in line.split(",")]
-    if len(parts) >= 2:
-        in_dt = datetime.strptime(parts[1], "%Y-%m-%d")
-        out_dt = (in_dt + timedelta(days=1)).strftime("%Y-%m-%d")
-        venue_list.append({"place": parts[0], "checkin": parts[1], "checkout": out_dt})
-    else:
-        venue_list.append({"place": parts[0]})
-
-# 一括検索
+# --- 実行処理の最後 ---
 all_results = []
-for v in venue_list:
-    print(f"🔎 検索中: {v['place']}")
-    res_df = main_search(v["place"], v.get("checkin"), v.get("checkout"), squeeze_cond)
-    if not res_df.empty: all_results.append(res_df)
+# (会場リスト作成などの処理...)
 
+# 検索実行
+for v in venue_list:
+    print(f"\n--- 🔎 {v['place']} の検索開始 ---")
+    res_df = main_search(v["place"], v.get("checkin"), v.get("checkout"), squeeze_cond)
+    if not res_df.empty:
+        all_results.append(res_df)
+
+# ファイル保存（空でも作成するように修正）
 if all_results:
     final_df = pd.concat(all_results).sort_values("料金")
     print("\n### 🏨 検索結果一覧")
     print(final_df.to_markdown(index=False))
     final_df.to_csv("result.csv", index=False, encoding="utf-8-sig")
 else:
-    print("❌ 空室が見つかりませんでした。")
+    print("\n❌ 条件に合う空室が見つかりませんでした。")
+    # 空のCSVを作成してArtifactのエラーを防ぐ
+    pd.DataFrame(columns=["会場", "結果"]).to_csv("result.csv", index=False)
