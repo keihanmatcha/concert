@@ -19,40 +19,77 @@ def initialize_data():
         data = json.load(f)
 
     records = []
+    # largeClasses -> middleClasses -> smallClasses -> detailClasses と深く潜る
     for large_entry in data["areaClasses"]["largeClasses"]:
         large_class_info = large_entry["largeClass"][0]
-        l_code, l_name = large_class_info["largeClassCode"], large_class_info["largeClassName"]
+        l_code = large_class_info["largeClassCode"]
+        l_name = large_class_info["largeClassName"]
 
+        # middleClassesが存在するかチェック
+        if len(large_entry["largeClass"]) < 2: continue
+        
         for middle_entry in large_entry["largeClass"][1]["middleClasses"]:
             middle_class_info = middle_entry["middleClass"][0]
-            m_code, m_name = middle_class_info["middleClassCode"], middle_class_info["middleClassName"]
+            m_code = middle_class_info["middleClassCode"]
+            m_name = middle_class_info["middleClassName"]
+
+            # smallClassesが存在するかチェック
+            if len(middle_entry["middleClass"]) < 2: continue
 
             for small_entry in middle_entry["middleClass"][1]["smallClasses"]:
                 small_class_info = small_entry["smallClass"][0]
-                s_code, s_name = small_class_info["smallClassCode"], small_class_info["smallClassName"]
+                s_code = small_class_info["smallClassCode"]
+                s_name = small_class_info["smallClassName"]
 
-                detail_classes = small_entry["smallClass"][1].get("detailClasses", [])
-                for detail_entry in detail_classes:
-                    d_class = detail_entry["detailClass"]
-                    records.append({
-                        "largeClassCode": l_code, "middleClassCode": m_code,
-                        "smallClassCode": s_code, "detailClassCode": d_class["detailClassCode"],
-                        "middleClassName": m_name, "smallClassName": s_name, "detailClassName": d_class["detailClassName"]
-                    })
+                # detailClassesが存在するかチェック（ここがエラーの原因でした）
+                # リストが2要素以上あり、かつ2要素目に'detailClasses'があるか確認
+                if len(small_entry["smallClass"]) >= 2:
+                    detail_data = small_entry["smallClass"][1]
+                    if "detailClasses" in detail_data:
+                        for detail_entry in detail_data["detailClasses"]:
+                            d_class = detail_entry["detailClass"]
+                            records.append({
+                                "largeClassCode": l_code,
+                                "middleClassCode": m_code,
+                                "smallClassCode": s_code,
+                                "detailClassCode": d_class["detailClassCode"],
+                                "largeClassName": l_name,
+                                "middleClassName": m_name,
+                                "smallClassName": s_name,
+                                "detailClassName": d_class["detailClassName"]
+                            })
+                    else:
+                        # 詳細エリアがない場合は、小エリアの情報をそのまま登録（必要に応じて）
+                        records.append({
+                            "largeClassCode": l_code, "middleClassCode": m_code,
+                            "smallClassCode": s_code, "detailClassCode": "",
+                            "largeClassName": l_name, "middleClassName": m_name,
+                            "smallClassName": s_name, "detailClassName": s_name
+                        })
     
     rakuten_df = pd.DataFrame(records)
-    gaz_df = pd.read_csv("gazetteer-of-japan.csv")[["kanji", "lat", "lng"]]
+    
+    # gazetteer-of-japan.csvの読み込み
+    try:
+        gaz_df = pd.read_csv("gazetteer-of-japan.csv")[["kanji", "lat", "lng"]]
+    except Exception as e:
+        print(f"⚠️ CSV読み込み警告: {e}")
+        gaz_df = pd.DataFrame(columns=["kanji", "lat", "lng"])
 
     # 緯度経度情報の紐付け
     def lookup_latlon(detail_name):
-        for name in detail_name.split("・"):
+        if not detail_name: return None, None
+        for name in str(detail_name).split("・"):
             match = gaz_df[gaz_df["kanji"] == name]
-            if not match.empty: return match.iloc[0]["lat"], match.iloc[0]["lng"]
+            if not match.empty:
+                return match.iloc[0]["lat"], match.iloc[0]["lng"]
         return None, None
 
-    rakuten_df[["latitude", "longitude"]] = rakuten_df["detailClassName"].apply(
-        lambda x: pd.Series(lookup_latlon(x)) if pd.notnull(x) else pd.Series([None, None])
-    )
+    if not rakuten_df.empty:
+        rakuten_df[["latitude", "longitude"]] = rakuten_df["detailClassName"].apply(
+            lambda x: pd.Series(lookup_latlon(x))
+        )
+    
     return rakuten_df, gaz_df
 
 rakuten_df, gaz_df = initialize_data()
