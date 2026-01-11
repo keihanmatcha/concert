@@ -18,32 +18,28 @@ def main_search(place_name, checkin=None, checkout=None, radius=3.0, squeeze_con
     if not checkin: checkin = date.today().isoformat()
     if not checkout: checkout = (date.today() + timedelta(days=1)).isoformat()
 
-    # --- ジオコーディング (日本語指定を追加) ---
-    geolocator = Nominatim(user_agent="rakuten_hotel_search_v3")
-    
-    # 検索ワードに「Japan」だけでなく、もし県名がなければ補完する等の工夫
-    query = place_name if "県" in place_name else f"宮城県 {place_name}"
-    print(f"🔍 検索ワード: {query}")
-    
+    # 1. 位置情報の取得（ここは県名を補完して精度を上げる）
+    geolocator = Nominatim(user_agent="rakuten_hotel_v4")
+    query = f"日本 {place_name}"
     location = geolocator.geocode(query, timeout=10, language="ja")
     
     if not location:
         print(f"❌ {place_name} の位置が特定できませんでした。")
         return pd.DataFrame()
     
-    print(f"📍 位置特定: {location.address}")
-    print(f"📌 座標: ({location.latitude}, {location.longitude})")
+    print(f"📍 座標特定: {location.address} ({location.latitude}, {location.longitude})")
 
-    # --- 楽天API ---
+    # 2. 楽天API (座標で直接検索するモード)
+    # エリアコード(middleClassCodeなど)を一切使わないのがコツです
     params = {
         "applicationId": RAKUTEN_APP_ID,
         "format": "json",
         "checkinDate": checkin,
         "checkoutDate": checkout,
-        "latitude": location.latitude,
-        "longitude": location.longitude,
-        "searchRadius": radius,
-        "datumType": 1,
+        "latitude": location.latitude,   # 直接、緯度を入れる
+        "longitude": location.longitude, # 直接、経度を入れる
+        "searchRadius": radius,          # 指定した半径
+        "datumType": 1,                  # 世界測地系
         "squeezeCondition": squeeze_cond,
         "hits": 30
     }
@@ -51,29 +47,25 @@ def main_search(place_name, checkin=None, checkout=None, radius=3.0, squeeze_con
     res = requests.get("https://app.rakuten.co.jp/services/api/Travel/VacantHotelSearch/20170426", params=params)
     
     if res.status_code != 200:
-        data = res.json()
-        if data.get("error") == "not_found":
-            print(f"⚠️ 半径{radius}km以内に空室が見つかりませんでした。")
-            print("💡 アドバイス: 楽天APIの仕様で最大3kmまでしか探せません。")
-            print("   会場名ではなく『仙台駅』など、ホテルが多い駅名で検索してみてください。")
-        else:
-            print(f"❌ APIエラー: {data.get('error_description')}")
+        # 3km以内に1軒もない場合、楽天APIはエラーを返します
+        print(f"⚠️ {place_name} の半径{radius}km以内に空室が見つかりませんでした。")
         return pd.DataFrame()
 
+    # 以降、ホテルの解析処理...
     hotels = res.json().get("hotels", [])
     plans = []
     for h in hotels:
-        h_base = h.get("hotel", [])
-        if len(h_base) < 2: continue
-        info = h_base[0].get("hotelBasicInfo", {})
-        rooms = h_base[1].get("roomInfo", [])
+        h_data = h.get("hotel", [])
+        if len(h_data) < 2: continue
+        info = h_data[0]["hotelBasicInfo"]
+        rooms = h_data[1].get("roomInfo", [])
         for i in range(0, len(rooms), 2):
             basic = rooms[i].get("roomBasicInfo", {})
             price = rooms[i+1].get("dailyCharge", {}).get("total")
             if price:
                 plans.append({
-                    "会場": place_name, "ホテル名": info.get("hotelName"),
-                    "料金": int(price), "評価": info.get("reviewAverage", 0), "予約URL": basic.get("reserveUrl")
+                    "会場": place_name, "チェックイン": checkin, "ホテル名": info["hotelName"],
+                    "料金": int(price), "予約URL": basic.get("reserveUrl")
                 })
     return pd.DataFrame(plans)
     
