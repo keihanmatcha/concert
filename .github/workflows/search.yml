@@ -1,0 +1,37 @@
+name: Hotel Search
+
+on:
+  workflow_dispatch: # 手動実行ボタンを有効にする
+    inputs:
+      venue:
+        description: '会場名, 日付 (例: セキスイハイムスーパーアリーナ, 2026-03-09)'
+        required: true
+        default: 'セキスイハイムスーパーアリーナ, 2026-03-09'
+      conditions:
+        description: 'こだわり条件 (禁煙,朝食付き など)'
+        required: false
+        default: '禁煙,朝食付き'
+
+jobs:
+  search:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+      - name: Run search
+        env:
+          SEARCH_VENUE: ${{ github.event.inputs.venue }}
+          SEARCH_COND: ${{ github.event.inputs.conditions }}
+          RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
+        run: python main.py
+      - name: Upload result
+        uses: actions/upload-artifact@v3
+        with:
+          name: search-result
+          path: result.csv
