@@ -1,7 +1,7 @@
 name: Hotel Search
 
 on:
-  workflow_dispatch: # 手動実行ボタンを有効にする
+  workflow_dispatch:
     inputs:
       venue:
         description: '会場名, 日付 (例: セキスイハイムスーパーアリーナ, 2026-03-09)'
@@ -16,22 +16,27 @@ jobs:
   search:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout repository
+        uses: actions/checkout@v4 # v3からv4に修正
+
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5 # v4からv5に修正
         with:
           python-version: '3.9'
+
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          pip install pandas requests geopy tabulate # Markdown表示用にtabulateを追加
+
       - name: Run search
         env:
           SEARCH_VENUE: ${{ github.event.inputs.venue }}
           SEARCH_COND: ${{ github.event.inputs.conditions }}
           RAKUTEN_APP_ID: ${{ secrets.RAKUTEN_APP_ID }}
         run: python main.py
+
       - name: Upload result
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4 # ここがエラーの原因！ v3からv4に修正
         with:
           name: search-result
           path: result.csv
